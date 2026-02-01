@@ -996,6 +996,8 @@
 
         // Extract GPS coordinates from image EXIF data
         function extractGPSFromImage(file, isFromCamera) {
+            console.log('Attempting to extract GPS from image...', { isFromCamera, fileType: file.type });
+            
             EXIF.getData(file, function() {
                 try {
                     const lat = EXIF.getTag(this, 'GPSLatitude');
@@ -1016,15 +1018,18 @@
                             longitude >= -180 && longitude <= 180) {
                             currentLocation = { latitude, longitude };
                             showLocation(currentLocation);
-                            console.log('GPS extracted successfully from EXIF:', currentLocation);
+                            console.log('✅ GPS extracted successfully from EXIF:', currentLocation);
+                            return; // Success!
                         } else {
                             console.log('Invalid GPS coordinates from EXIF');
-                            handleNoEXIFLocation(isFromCamera);
                         }
                     } else {
-                        console.log('No EXIF GPS data found');
-                        handleNoEXIFLocation(isFromCamera);
+                        console.log('No EXIF GPS data found in expected format');
                     }
+                    
+                    // EXIF failed - try fallback
+                    handleNoEXIFLocation(isFromCamera);
+                    
                 } catch (error) {
                     console.error('Error reading EXIF:', error);
                     handleNoEXIFLocation(isFromCamera);
@@ -1032,17 +1037,67 @@
             });
         }
 
-        // Handle case when EXIF has no location
+        // Handle case when EXIF has no location - with improved mobile fallback
         function handleNoEXIFLocation(isFromCamera) {
-            if (isFromCamera) {
-                // Only get current location for newly taken photos
-                console.log('Newly taken photo - getting current location');
-                getCurrentLocation();
+            console.log('EXIF GPS not available, trying fallback...', { isFromCamera });
+            
+            // For both camera and uploaded images on mobile, try Geolocation as fallback
+            // This is especially important for mobile devices where EXIF.js may not work well
+            if (isFromCamera || isMobileDevice()) {
+                console.log('Mobile device or camera - trying Geolocation API fallback');
+                getCurrentLocationWithTimeout();
             } else {
-                // For uploaded photos without EXIF, show no location
-                console.log('Uploaded photo without EXIF - no location available');
+                // Desktop uploaded photo without EXIF - no location available
+                console.log('Desktop uploaded photo without EXIF - no location available');
                 showNoLocation();
             }
+        }
+        
+        // Detect if running on mobile device
+        function isMobileDevice() {
+            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        }
+        
+        // Get current location with timeout (for mobile fallback)
+        function getCurrentLocationWithTimeout() {
+            const timeoutMs = 10000; // 10 seconds timeout
+            
+            if (!navigator.geolocation) {
+                console.warn('Geolocation not supported');
+                showNoLocation();
+                return;
+            }
+            
+            console.log('Requesting Geolocation...');
+            showLocation({ latitude: 0, longitude: 0 }); // Show loading state
+            document.getElementById('coordinates').textContent = 'מאתר מיקום...';
+            
+            const timeoutId = setTimeout(() => {
+                console.warn('Geolocation timeout');
+                showNoLocation();
+            }, timeoutMs);
+            
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    clearTimeout(timeoutId);
+                    currentLocation = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    showLocation(currentLocation);
+                    console.log('✅ GPS from Geolocation API (fallback):', currentLocation);
+                },
+                function(error) {
+                    clearTimeout(timeoutId);
+                    console.error('Geolocation error:', error.message);
+                    showNoLocation();
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: timeoutMs,
+                    maximumAge: 0
+                }
+            );
         }
 
         // Convert DMS (Degrees, Minutes, Seconds) to Decimal Degrees
@@ -1776,22 +1831,73 @@ ${complexContext}
                     : '';
                 
                 return `
-                    <div class="history-item" onclick='viewHistoryItem(${index})'>
-                        ${imageHtml}
-                        <div class="history-date">${new Date(entry.date).toLocaleDateString('he-IL', {
-                            year: 'numeric',
-                            month: 'long',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                        })}</div>
-                        <div class="history-title">${entry.title}</div>
-                        ${complexBadge}
-                        ${locationBadge}
-                        <div class="history-preview">${entry.content.substring(0, 100)}...</div>
+                    <div class="history-item" style="position: relative;">
+                        <button onclick="deleteHistoryItem(${index}, event)" style="position: absolute; top: 8px; right: 8px; background: rgba(255,0,0,0.8); color: white; border: none; border-radius: 50%; width: 32px; height: 32px; font-size: 18px; cursor: pointer; z-index: 10; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.3);" title="מחק">❌</button>
+                        <div onclick='viewHistoryItem(${index})' style="cursor: pointer;">
+                            ${imageHtml}
+                            <div class="history-date">${new Date(entry.date).toLocaleDateString('he-IL', {
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            })}</div>
+                            <div class="history-title">${entry.title}</div>
+                            ${complexBadge}
+                            ${locationBadge}
+                            <div class="history-preview">${entry.content.substring(0, 100)}...</div>
+                        </div>
                     </div>
                 `;
             }).join('');
+        }
+        
+        // Delete single history item
+        async function deleteHistoryItem(index, event) {
+            event.stopPropagation(); // Prevent opening the item
+            
+            const history = JSON.parse(localStorage.getItem('japanGuideHistory') || '[]');
+            
+            if (index < 0 || index >= history.length) {
+                alert('❌ שגיאה: פריט לא נמצא');
+                return;
+            }
+            
+            const entry = history[index];
+            
+            // Confirm deletion
+            if (!confirm(`🗑️ למחוק את "${entry.title}"?\n\nפעולה זו תמחק גם את התמונה המלאה מהזיכרון.`)) {
+                return;
+            }
+            
+            try {
+                // Delete from IndexedDB if exists
+                if (entry.id && db) {
+                    try {
+                        const transaction = db.transaction([STORE_NAME], 'readwrite');
+                        const objectStore = transaction.objectStore(STORE_NAME);
+                        objectStore.delete(entry.id);
+                        console.log('✅ Deleted image from IndexedDB:', entry.id);
+                    } catch (err) {
+                        console.warn('Could not delete from IndexedDB:', err);
+                    }
+                }
+                
+                // Delete from localStorage
+                history.splice(index, 1);
+                localStorage.setItem('japanGuideHistory', JSON.stringify(history));
+                
+                console.log('✅ Deleted from history');
+                
+                // Reload history display
+                loadHistory();
+                
+                alert('✅ נמחק בהצלחה!');
+                
+            } catch (error) {
+                console.error('Error deleting item:', error);
+                alert('❌ שגיאה במחיקה: ' + error.message);
+            }
         }
 
         function viewHistoryItem(index) {
