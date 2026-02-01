@@ -620,6 +620,178 @@
         let previousComplex = null; // Store only the last complex/venue
         let analysisHistory = []; // Keep history for statistics only
         
+        // IndexedDB for storing full-size images
+        const DB_NAME = 'JapanGuideDB';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'images';
+        let db = null;
+        
+        // Initialize IndexedDB
+        async function initIndexedDB() {
+            try {
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open(DB_NAME, DB_VERSION);
+                    
+                    request.onerror = () => {
+                        console.error('IndexedDB error:', request.error);
+                        reject(request.error);
+                    };
+                    
+                    request.onsuccess = () => {
+                        db = request.result;
+                        console.log('✅ IndexedDB initialized');
+                        resolve(db);
+                    };
+                    
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        if (!db.objectStoreNames.contains(STORE_NAME)) {
+                            const objectStore = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                            objectStore.createIndex('timestamp', 'timestamp', { unique: false });
+                            console.log('✅ IndexedDB object store created');
+                        }
+                    };
+                });
+            } catch (error) {
+                console.error('Failed to initialize IndexedDB:', error);
+                return null;
+            }
+        }
+        
+        // Save image to IndexedDB
+        async function saveImageToIndexedDB(id, imageData, metadata) {
+            try {
+                if (!db) {
+                    await initIndexedDB();
+                }
+                
+                if (!db) {
+                    console.warn('IndexedDB not available, skipping image save');
+                    return false;
+                }
+                
+                return new Promise((resolve, reject) => {
+                    const transaction = db.transaction([STORE_NAME], 'readwrite');
+                    const objectStore = transaction.objectStore(STORE_NAME);
+                    
+                    const record = {
+                        id: id,
+                        imageData: imageData,
+                        timestamp: Date.now(),
+                        ...metadata
+                    };
+                    
+                    const request = objectStore.put(record);
+                    
+                    request.onsuccess = () => {
+                        console.log('✅ Image saved to IndexedDB:', id);
+                        resolve(true);
+                    };
+                    
+                    request.onerror = () => {
+                        console.error('Failed to save image to IndexedDB:', request.error);
+                        reject(request.error);
+                    };
+                });
+            } catch (error) {
+                console.error('saveImageToIndexedDB error:', error);
+                return false;
+            }
+        }
+        
+        // Get image from IndexedDB
+        async function getImageFromIndexedDB(id) {
+            try {
+                if (!db) {
+                    await initIndexedDB();
+                }
+                
+                if (!db) {
+                    return null;
+                }
+                
+                return new Promise((resolve, reject) => {
+                    const transaction = db.transaction([STORE_NAME], 'readonly');
+                    const objectStore = transaction.objectStore(STORE_NAME);
+                    const request = objectStore.get(id);
+                    
+                    request.onsuccess = () => {
+                        resolve(request.result);
+                    };
+                    
+                    request.onerror = () => {
+                        console.error('Failed to get image from IndexedDB:', request.error);
+                        reject(request.error);
+                    };
+                });
+            } catch (error) {
+                console.error('getImageFromIndexedDB error:', error);
+                return null;
+            }
+        }
+        
+        // Get all images from IndexedDB
+        async function getAllImagesFromIndexedDB() {
+            try {
+                if (!db) {
+                    await initIndexedDB();
+                }
+                
+                if (!db) {
+                    return [];
+                }
+                
+                return new Promise((resolve, reject) => {
+                    const transaction = db.transaction([STORE_NAME], 'readonly');
+                    const objectStore = transaction.objectStore(STORE_NAME);
+                    const request = objectStore.getAll();
+                    
+                    request.onsuccess = () => {
+                        resolve(request.result || []);
+                    };
+                    
+                    request.onerror = () => {
+                        console.error('Failed to get all images:', request.error);
+                        reject(request.error);
+                    };
+                });
+            } catch (error) {
+                console.error('getAllImagesFromIndexedDB error:', error);
+                return [];
+            }
+        }
+        
+        // Delete old images to free space (keep only last 100)
+        async function cleanupOldImages() {
+            try {
+                const allImages = await getAllImagesFromIndexedDB();
+                
+                if (allImages.length > 100) {
+                    // Sort by timestamp
+                    allImages.sort((a, b) => a.timestamp - b.timestamp);
+                    
+                    // Delete oldest ones
+                    const toDelete = allImages.slice(0, allImages.length - 100);
+                    
+                    const transaction = db.transaction([STORE_NAME], 'readwrite');
+                    const objectStore = transaction.objectStore(STORE_NAME);
+                    
+                    for (let image of toDelete) {
+                        objectStore.delete(image.id);
+                    }
+                    
+                    console.log(`🗑️ Cleaned up ${toDelete.length} old images`);
+                }
+            } catch (error) {
+                console.error('cleanupOldImages error:', error);
+            }
+        }
+        
+        // Initialize IndexedDB on load
+        initIndexedDB().catch(err => {
+            console.warn('IndexedDB initialization failed, will use localStorage only:', err);
+        });
+        
         // Check online status
         function updateOnlineStatus() {
             const statusBar = document.getElementById('statusBar');
