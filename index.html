@@ -586,26 +586,12 @@
                 </div>
 
                 <div class="settings-section">
-                    <label class="settings-label">🗺️ מפתח API של Google Maps</label>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <input 
-                            type="password" 
-                            id="googleMapsKey" 
-                            class="settings-input" 
-                            placeholder="הכנס מפתח Google Maps API"
-                            value=""
-                            style="flex: 1;"
-                        >
-                        <button class="audio-btn" onclick="toggleGoogleMapsKeyVisibility()" style="margin: 0; padding: 12px 20px;">
-                            👁️
-                        </button>
-                    </div>
-                    <p style="color: #666; font-size: 0.9rem; margin-top: 8px;">
-                        💡 קבל מפתח ב-<a href="https://console.cloud.google.com/" target="_blank" style="color: var(--japan-red);">Google Cloud Console</a><br>
-                        🎯 יאפשר זיהוי מדויק של מקומות לפי GPS! (חינמי עד 40,000 בקשות/חודש)
+                    <h3 style="color: var(--bamboo-green); margin-bottom: 15px;">🗺️ זיהוי מקומות</h3>
+                    <p style="color: #666; line-height: 1.6;">
+                        ✅ האפליקציה משתמשת ב-<strong>OpenStreetMap</strong> לזיהוי מקומות לפי GPS<br>
+                        🎯 חינמי לגמרי ללא צורך במפתח API<br>
+                        🌍 מדויק במיוחד למקומות תיירותיים מפורסמים
                     </p>
-                    <button class="audio-btn" onclick="saveGoogleMapsKey()" style="margin-top: 15px;">💾 שמור הגדרות</button>
-                    <p id="googleMapsKeyStatus" style="margin-top: 10px; font-size: 0.9rem;"></p>
                 </div>
 
                 <div class="settings-section">
@@ -1194,51 +1180,47 @@
             document.getElementById('noLocationWarning').style.display = 'block';
         }
 
-        // Reverse geocoding - find place name from GPS coordinates
+        // Reverse geocoding - find place name from GPS coordinates using OpenStreetMap
         async function getPlaceNameFromGPS(latitude, longitude) {
-            const googleMapsKey = localStorage.getItem('googleMapsApiKey');
-            
-            if (!googleMapsKey) {
-                console.log('⚠️ No Google Maps API key - skipping reverse geocoding');
-                return null;
-            }
-            
             try {
                 console.log(`🗺️ Searching place name for: ${latitude}, ${longitude}`);
                 
-                const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${googleMapsKey}&language=en`;
+                // OpenStreetMap Nominatim - free, no API key needed!
+                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`;
                 
-                const response = await fetch(url);
+                const response = await fetch(url, {
+                    headers: {
+                        'User-Agent': 'JapanTravelGuide/1.0' // Required by Nominatim
+                    }
+                });
+                
                 const data = await response.json();
                 
-                if (data.status === 'OK' && data.results.length > 0) {
-                    // Try to find the most relevant result (usually first one)
-                    const result = data.results[0];
-                    
-                    // Look for point of interest (POI) name
+                if (data && data.display_name) {
                     let placeName = null;
                     
-                    // Check address components for establishment/point_of_interest
-                    for (let component of result.address_components) {
-                        if (component.types.includes('establishment') || 
-                            component.types.includes('point_of_interest') ||
-                            component.types.includes('tourist_attraction') ||
-                            component.types.includes('place_of_worship')) {
-                            placeName = component.long_name;
-                            break;
-                        }
-                    }
-                    
-                    // If no specific POI, use formatted address
-                    if (!placeName) {
-                        placeName = result.formatted_address;
+                    // Try to get specific place name from address details
+                    if (data.address) {
+                        // Priority order for place types
+                        placeName = data.address.tourism ||           // Tourist attractions
+                                   data.address.amenity ||            // Temples, shrines, etc.
+                                   data.address.historic ||           // Historic sites
+                                   data.address.building ||           // Named buildings
+                                   data.address.attraction ||         // General attractions
+                                   data.name ||                       // Place name if available
+                                   data.address.neighbourhood ||      // Neighborhood
+                                   data.address.suburb ||             // Suburb/area
+                                   data.display_name.split(',')[0];  // First part of address
+                    } else {
+                        placeName = data.display_name.split(',')[0];
                     }
                     
                     console.log('✅ Found place:', placeName);
+                    console.log('📍 Full address:', data.display_name);
                     return placeName;
                     
                 } else {
-                    console.log('❌ Google Maps returned no results:', data.status);
+                    console.log('❌ Nominatim returned no results');
                     return null;
                 }
                 
@@ -1362,13 +1344,13 @@
                     console.log(`   קו אורך: ${currentLocation.longitude}`);
                     
                     // Try to get place name from Google Maps
-                    updateProgress(15, 1, 'מחפש שם מקום ב-Google Maps...');
+                    updateProgress(15, 1, 'מחפש שם מקום ב-OpenStreetMap...');
                     placeName = await getPlaceNameFromGPS(currentLocation.latitude, currentLocation.longitude);
                     
                     if (placeName) {
-                        console.log('🎯 Google Maps מצא:', placeName);
+                        console.log('🎯 OpenStreetMap מצא:', placeName);
                     } else {
-                        console.log('⚠️ Google Maps לא מצא שם מקום מדויק');
+                        console.log('⚠️ OpenStreetMap לא מצא שם מקום מדויק');
                     }
                 } else {
                     console.log('⚠️ אין GPS - שולח בלי מיקום');
@@ -1406,12 +1388,12 @@
                 let locationText = '';
                 if (currentLocation) {
                     if (placeName) {
-                        // We have both GPS and place name from Google Maps
-                        locationText = `\n\n🎯 מיקום מדויק מ-Google Maps: "${placeName}"
+                        // We have both GPS and place name from OpenStreetMap
+                        locationText = `\n\n🎯 מיקום מדויק מ-OpenStreetMap: "${placeName}"
 קואורדינטות GPS: ${currentLocation.latitude}, ${currentLocation.longitude}
 
 ⚠️ חשוב מאוד: 
-- Google Maps זיהה שאתה נמצא ב: "${placeName}"
+- OpenStreetMap זיהה שאתה נמצא ב: "${placeName}"
 - זה המיקום המדויק - אל תנחש מקומות אחרים!
 - התמונה משמשת רק לזיהוי מה ספציפית בתוך המקום הזה
 - תן הסבר על "${placeName}" בהתבסס על התמונה`;
@@ -2119,52 +2101,6 @@ ${complexContext}
             if (apiKey) {
                 document.getElementById('apiKey').value = apiKey;
             }
-            
-            const googleMapsKey = localStorage.getItem('googleMapsApiKey');
-            if (googleMapsKey) {
-                document.getElementById('googleMapsKey').value = googleMapsKey;
-            }
-        }
-
-        function toggleGoogleMapsKeyVisibility() {
-            const keyInput = document.getElementById('googleMapsKey');
-            if (keyInput.type === 'password') {
-                keyInput.type = 'text';
-            } else {
-                keyInput.type = 'password';
-            }
-        }
-
-        function saveGoogleMapsKey() {
-            const key = document.getElementById('googleMapsKey').value.trim();
-            const statusEl = document.getElementById('googleMapsKeyStatus');
-            
-            if (!key) {
-                statusEl.textContent = '❌ נא להזין מפתח API!';
-                statusEl.style.color = 'red';
-                return;
-            }
-            
-            // Validate API key format (Google Maps keys usually start with AIza)
-            if (!key.startsWith('AIza')) {
-                statusEl.textContent = '⚠️ המפתח לא נראה תקין - צריך להתחיל ב-AIza';
-                statusEl.style.color = 'orange';
-                return;
-            }
-            
-            if (key.length < 30) {
-                statusEl.textContent = '⚠️ המפתח נראה קצר מדי - וודא שהעתקת אותו במלואו';
-                statusEl.style.color = 'orange';
-                return;
-            }
-            
-            localStorage.setItem('googleMapsApiKey', key);
-            statusEl.textContent = '✅ מפתח Google Maps נשמר בהצלחה!';
-            statusEl.style.color = 'green';
-            
-            setTimeout(() => {
-                statusEl.textContent = '';
-            }, 3000);
         }
 
         function updateStats() {
