@@ -586,6 +586,29 @@
                 </div>
 
                 <div class="settings-section">
+                    <label class="settings-label">🗺️ מפתח API של Google Maps</label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input 
+                            type="password" 
+                            id="googleMapsKey" 
+                            class="settings-input" 
+                            placeholder="הכנס מפתח Google Maps API"
+                            value=""
+                            style="flex: 1;"
+                        >
+                        <button class="audio-btn" onclick="toggleGoogleMapsKeyVisibility()" style="margin: 0; padding: 12px 20px;">
+                            👁️
+                        </button>
+                    </div>
+                    <p style="color: #666; font-size: 0.9rem; margin-top: 8px;">
+                        💡 קבל מפתח ב-<a href="https://console.cloud.google.com/" target="_blank" style="color: var(--japan-red);">Google Cloud Console</a><br>
+                        🎯 יאפשר זיהוי מדויק של מקומות לפי GPS! (חינמי עד 40,000 בקשות/חודש)
+                    </p>
+                    <button class="audio-btn" onclick="saveGoogleMapsKey()" style="margin-top: 15px;">💾 שמור הגדרות</button>
+                    <p id="googleMapsKeyStatus" style="margin-top: 10px; font-size: 0.9rem;"></p>
+                </div>
+
+                <div class="settings-section">
                     <h3 style="color: var(--bamboo-green); margin-bottom: 15px;">📊 סטטיסטיקות</h3>
                     <p>תמונות נותחו: <strong id="statsImages">0</strong></p>
                     <p>מקומות בהיסטוריה: <strong id="statsHistory">0</strong></p>
@@ -1171,6 +1194,60 @@
             document.getElementById('noLocationWarning').style.display = 'block';
         }
 
+        // Reverse geocoding - find place name from GPS coordinates
+        async function getPlaceNameFromGPS(latitude, longitude) {
+            const googleMapsKey = localStorage.getItem('googleMapsApiKey');
+            
+            if (!googleMapsKey) {
+                console.log('⚠️ No Google Maps API key - skipping reverse geocoding');
+                return null;
+            }
+            
+            try {
+                console.log(`🗺️ Searching place name for: ${latitude}, ${longitude}`);
+                
+                const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${googleMapsKey}&language=en`;
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === 'OK' && data.results.length > 0) {
+                    // Try to find the most relevant result (usually first one)
+                    const result = data.results[0];
+                    
+                    // Look for point of interest (POI) name
+                    let placeName = null;
+                    
+                    // Check address components for establishment/point_of_interest
+                    for (let component of result.address_components) {
+                        if (component.types.includes('establishment') || 
+                            component.types.includes('point_of_interest') ||
+                            component.types.includes('tourist_attraction') ||
+                            component.types.includes('place_of_worship')) {
+                            placeName = component.long_name;
+                            break;
+                        }
+                    }
+                    
+                    // If no specific POI, use formatted address
+                    if (!placeName) {
+                        placeName = result.formatted_address;
+                    }
+                    
+                    console.log('✅ Found place:', placeName);
+                    return placeName;
+                    
+                } else {
+                    console.log('❌ Google Maps returned no results:', data.status);
+                    return null;
+                }
+                
+            } catch (error) {
+                console.error('❌ Error in reverse geocoding:', error);
+                return null;
+            }
+        }
+
         // Progress tracking with simulation
         let progressInterval = null;
         let currentProgress = 0;
@@ -1278,10 +1355,21 @@
 
             try {
                 // Log current location for debugging
+                let placeName = null;
                 if (currentLocation) {
                     console.log('📍 שולח GPS ל-Claude:', currentLocation);
                     console.log(`   קו רוחב: ${currentLocation.latitude}`);
                     console.log(`   קו אורך: ${currentLocation.longitude}`);
+                    
+                    // Try to get place name from Google Maps
+                    updateProgress(15, 1, 'מחפש שם מקום ב-Google Maps...');
+                    placeName = await getPlaceNameFromGPS(currentLocation.latitude, currentLocation.longitude);
+                    
+                    if (placeName) {
+                        console.log('🎯 Google Maps מצא:', placeName);
+                    } else {
+                        console.log('⚠️ Google Maps לא מצא שם מקום מדויק');
+                    }
                 } else {
                     console.log('⚠️ אין GPS - שולח בלי מיקום');
                 }
@@ -1317,13 +1405,26 @@
                 // Prepare location context
                 let locationText = '';
                 if (currentLocation) {
-                    locationText = `\n\n🎯 קואורדינטות GPS מדויקות: ${currentLocation.latitude}, ${currentLocation.longitude}
+                    if (placeName) {
+                        // We have both GPS and place name from Google Maps
+                        locationText = `\n\n🎯 מיקום מדויק מ-Google Maps: "${placeName}"
+קואורדינטות GPS: ${currentLocation.latitude}, ${currentLocation.longitude}
+
+⚠️ חשוב מאוד: 
+- Google Maps זיהה שאתה נמצא ב: "${placeName}"
+- זה המיקום המדויק - אל תנחש מקומות אחרים!
+- התמונה משמשת רק לזיהוי מה ספציפית בתוך המקום הזה
+- תן הסבר על "${placeName}" בהתבסס על התמונה`;
+                    } else {
+                        // Only GPS coordinates, no place name
+                        locationText = `\n\n🎯 קואורדינטות GPS מדויקות: ${currentLocation.latitude}, ${currentLocation.longitude}
 
 ⚠️ חובה חשובה: הקואורדינטות הללו הן הסמכות הגבוהה ביותר למיקום!
 - חפש מה נמצא בדיוק בקואורדינטות האלה
 - אל תנחש מיקום רחוק או שונה לגמרי
 - התמונה משמשת רק לזיהוי מה ספציפית בתוך המתחם
 - אם התמונה נראית כמו מקום X אבל הקואורדינטות מפנות למקום Y - המיקום הוא Y!`;
+                    }
                 } else {
                     locationText = `\n\nאין קואורדינטות GPS זמינות. התבסס על ניתוח התמונה בלבד.`;
                 }
@@ -2018,6 +2119,52 @@ ${complexContext}
             if (apiKey) {
                 document.getElementById('apiKey').value = apiKey;
             }
+            
+            const googleMapsKey = localStorage.getItem('googleMapsApiKey');
+            if (googleMapsKey) {
+                document.getElementById('googleMapsKey').value = googleMapsKey;
+            }
+        }
+
+        function toggleGoogleMapsKeyVisibility() {
+            const keyInput = document.getElementById('googleMapsKey');
+            if (keyInput.type === 'password') {
+                keyInput.type = 'text';
+            } else {
+                keyInput.type = 'password';
+            }
+        }
+
+        function saveGoogleMapsKey() {
+            const key = document.getElementById('googleMapsKey').value.trim();
+            const statusEl = document.getElementById('googleMapsKeyStatus');
+            
+            if (!key) {
+                statusEl.textContent = '❌ נא להזין מפתח API!';
+                statusEl.style.color = 'red';
+                return;
+            }
+            
+            // Validate API key format (Google Maps keys usually start with AIza)
+            if (!key.startsWith('AIza')) {
+                statusEl.textContent = '⚠️ המפתח לא נראה תקין - צריך להתחיל ב-AIza';
+                statusEl.style.color = 'orange';
+                return;
+            }
+            
+            if (key.length < 30) {
+                statusEl.textContent = '⚠️ המפתח נראה קצר מדי - וודא שהעתקת אותו במלואו';
+                statusEl.style.color = 'orange';
+                return;
+            }
+            
+            localStorage.setItem('googleMapsApiKey', key);
+            statusEl.textContent = '✅ מפתח Google Maps נשמר בהצלחה!';
+            statusEl.style.color = 'green';
+            
+            setTimeout(() => {
+                statusEl.textContent = '';
+            }, 3000);
         }
 
         function updateStats() {
